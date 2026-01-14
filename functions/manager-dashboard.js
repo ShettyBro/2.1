@@ -33,7 +33,7 @@ const verifyAuth = (event) => {
   const token = authHeader.substring(7);
   const decoded = jwt.verify(token, JWT_SECRET);
 
-  if (decoded.role !== 'PRINCIPAL' && decoded.role !== 'MANAGER') {
+  if (decoded.role !== 'principal' && decoded.role !== 'manager') {
     throw new Error('Unauthorized: Principal or Manager role required');
   }
 
@@ -227,7 +227,7 @@ exports.handler = async (event) => {
     // 9. CHECK IF TEAM MANAGER EXISTS (FOR PRINCIPAL)
     // ============================================
     let has_team_manager = false;
-    if (auth.role === 'PRINCIPAL') {
+    if (auth.role === 'principal') {
       const managerResult = await pool
         .request()
         .input('college_id', sql.Int, auth.college_id)
