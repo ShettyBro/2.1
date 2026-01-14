@@ -70,8 +70,8 @@ exports.handler = async (event) => {
             }),
           };
         }
-const role = decoded.role;
-console.log('Decoded role:', role);
+      const role = decoded.role;
+
 
     if (decoded.role !== 'PRINCIPAL' && decoded.role !== 'MANAGER') {
       throw new Error('Unauthorized: Principal or Manager role required');
