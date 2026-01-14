@@ -15,55 +15,99 @@ const dbConfig = {
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-const headers = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
-
-// ============================================================================
-// HELPER: Verify JWT and extract user info
-// ============================================================================
-const verifyAuth = (event) => {
-  const authHeader = event.headers.authorization || event.headers.Authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    throw new Error('Missing or invalid Authorization header');
-  }
-
-  const token = authHeader.substring(7);
-  const decoded = jwt.verify(token, JWT_SECRET);
-
-  if (decoded.role !== 'principal' && decoded.role !== 'manager') {
-    throw new Error('Unauthorized: Principal or Manager role required');
-  }
-
-  return {
-    user_id: decoded.user_id,
-    role: decoded.role,
-    college_id: decoded.college_id,
-  };
-};
-
-// ============================================================================
-// MAIN HANDLER
-// ============================================================================
 exports.handler = async (event) => {
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers, body: '' };
-  }
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  };
 
-  if (event.httpMethod !== 'POST') {
+  // Handle preflight
+  if (event.httpMethod === "OPTIONS") {
     return {
-      statusCode: 405,
+      statusCode: 200,
       headers,
-      body: JSON.stringify({ error: 'Method not allowed' }),
+      body: "",
     };
   }
 
+  // Only allow POST
+  if (event.httpMethod !== "POST") {
+    return {
+      statusCode: 405,
+      headers,
+      body: JSON.stringify({ success: false, message: "Method not allowed" }),
+    };
+  }
+
+  let  // Handle preflight
+  if (event.httpMethod === "OPTIONS") {
+    return {
+      statusCode: 200,
+      headers,
+      body: "",
+    };
+  }
+
+  // Only allow POST
+  if (event.httpMethod !== "POST") {
+    return {
+      statusCode: 405,
+      headers,
+      body: JSON.stringify({ success: false, message: "Method not allowed" }),
+    };
+  };
+
+
+  
+
   let pool;
   try {
-    // Verify authentication
-    const auth = verifyAuth(event);
+    const authHeader = event.headers.authorization || event.headers.Authorization;
+        
+        if (!authHeader || !authHeader.startsWith("Bearer ")) {
+          return {
+            statusCode: 401,
+            headers,
+            body: JSON.stringify({
+              success: false,
+              message: "Token expired. Redirecting to login...",
+              redirect: "https://vtufest2026.acharyahabba.com/",
+            }),
+          };
+        }
+    
+        const token = authHeader.substring(7);
+        let decoded;
+    
+        try {
+          decoded = jwt.verify(token, JWT_SECRET);
+        } catch (err) {
+          return {
+            statusCode: 401,
+            headers,
+            body: JSON.stringify({
+              success: false,
+              message: "Token expired. Redirecting to login...",
+              redirect: "https://vtufest2026.acharyahabba.com/",
+            }),
+          };
+        }
+    
+        const { student_id } = decoded;
+    
+        if (!student_id) {
+          return {
+            statusCode: 401,
+            headers,
+            body: JSON.stringify({
+              success: false,
+              message: "Invalid token format",
+              redirect: "https://vtufest2026.acharyahabba.com/",
+            }),
+          };
+        }
+ 
 
     // Connect to database
     pool = await sql.connect(dbConfig);
