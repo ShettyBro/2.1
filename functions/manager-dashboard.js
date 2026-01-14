@@ -15,55 +15,32 @@ const dbConfig = {
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
+const headers = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+
+// ============================================================================
+// MAIN HANDLER
+// ============================================================================
 exports.handler = async (event) => {
-  const headers = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  };
-
-  // Handle preflight
-  if (event.httpMethod === "OPTIONS") {
-    return {
-      statusCode: 200,
-      headers,
-      body: "",
-    };
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: '' };
   }
-
-  // Only allow POST
-  if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers,
-      body: JSON.stringify({ success: false, message: "Method not allowed" }),
-    };
-  }
-
-  let  // Handle preflight
-  if (event.httpMethod === "OPTIONS") {
-    return {
-      statusCode: 200,
-      headers,
-      body: "",
-    };
-  }
-
-  // Only allow POST
-  if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers,
-      body: JSON.stringify({ success: false, message: "Method not allowed" }),
-    };
-  };
-
-
   
-
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers,
+      body: JSON.stringify({ error: 'Method not allowed' }),
+    };
+  }
+  
   let pool;
   try {
-    const authHeader = event.headers.authorization || event.headers.Authorization;
+     const authHeader = event.headers.authorization || event.headers.Authorization;
         
         if (!authHeader || !authHeader.startsWith("Bearer ")) {
           return {
@@ -93,35 +70,31 @@ exports.handler = async (event) => {
             }),
           };
         }
+
+    if (decoded.role !== 'principal' && decoded.role !== 'manager') {
+      throw new Error('Unauthorized: Principal or Manager role required');
+    }
+    const auth = {
+      user_id: decoded.user_id,
+      college_id: decoded.college_id,
+      role: decoded.role,
+    };
+
     
-        const { student_id } = decoded;
-    
-        if (!student_id) {
-          return {
-            statusCode: 401,
-            headers,
-            body: JSON.stringify({
-              success: false,
-              message: "Invalid token format",
-              redirect: "https://vtufest2026.acharyahabba.com/",
-            }),
-          };
-        }
- 
 
     // Connect to database
     pool = await sql.connect(dbConfig);
-
+    
     // ============================================
     // 1. GET COLLEGE INFO
     // ============================================
     const collegeResult = await pool
-      .request()
-      .input('college_id', sql.Int, auth.college_id)
-      .query(`
-        SELECT 
-          college_code,
-          college_name,
+    .request()
+    .input('college_id', sql.Int, auth.college_id)
+    .query(`
+      SELECT 
+      college_code,
+      college_name,
           place,
           max_quota,
           is_final_approved,
