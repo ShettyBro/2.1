@@ -22,53 +22,51 @@ const headers = {
 };
 
 const verifyAuth = (event) => {
-   try {
-      // ============================================
-      // STEP 1: VALIDATE JWT TOKEN
-      // ============================================
-      const authHeader = event.headers.authorization || event.headers.Authorization;
-      
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return {
-          statusCode: 401,
-          headers,
-          body: JSON.stringify({
-            success: false,
-            message: "Token expired. Redirecting to login...",
-            redirect: "https://vtufest2026.acharyahabba.com/",
-          }),
-        };
-      }
-  
-      const token = authHeader.substring(7);
-      let decoded;
-  
-      try {
-        decoded = jwt.verify(token, JWT_SECRET);
-      } catch (err) {
-        return {
-          statusCode: 401,
-          headers,
-          body: JSON.stringify({
-            success: false,
-            message: "Token expired. Redirecting to login...",
-            redirect: "https://vtufest2026.acharyahabba.com/",
-          }),
-        };
-      }
 
-      if (decoded.role !== 'principal' && decoded.role !== 'manager') {
-        throw new Error('Unauthorized: Principal or Manager role required');
-      }
+ try {
+       // ============================================
+       // STEP 1: VALIDATE JWT TOKEN
+       // ============================================
+       const authHeader = event.headers.authorization || event.headers.Authorization;
+       
+       if (!authHeader || !authHeader.startsWith("Bearer ")) {
+         return {
+           statusCode: 401,
+           headers,
+           body: JSON.stringify({
+             success: false,
+             message: "Token expired. Redirecting to login...",
+             redirect: "https://vtufest2026.acharyahabba.com/",
+           }),
+         };
+       }
+   
+       const token = authHeader.substring(7);
+       let decoded;
+   
+       try {
+         decoded = jwt.verify(token, JWT_SECRET);
+       } catch (err) {
+         return {
+           statusCode: 401,
+           headers,
+           body: JSON.stringify({
+             success: false,
+             message: "Token expired. Redirecting to login...",
+             redirect: "https://vtufest2026.acharyahabba.com/",
+           }),
+         };
+       }
+ 
+       if (decoded.role !== 'principal' && decoded.role !== 'manager') {
+         throw new Error('Unauthorized: Principal or Manager role required');
+       }
 
-      return {
-        user_id: decoded.user_id,
-        role: decoded.role,
-        college_id: decoded.college_id,
-      };
-   } catch (error) {
-      throw error;
-   }
+  return {
+    user_id: decoded.user_id,
+    role: decoded.role,
+    college_id: decoded.college_id,
+  };
 };
 
 // ============================================================================
