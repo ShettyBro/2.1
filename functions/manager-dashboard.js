@@ -70,6 +70,8 @@ exports.handler = async (event) => {
             }),
           };
         }
+const role = decoded.role;
+console.log('Decoded role:', role);
 
     if (decoded.role !== 'principal' && decoded.role !== 'manager') {
       throw new Error('Unauthorized: Principal or Manager role required');
@@ -80,7 +82,7 @@ exports.handler = async (event) => {
       role: decoded.role,
     };
 
-    
+
 
     // Connect to database
     pool = await sql.connect(dbConfig);
