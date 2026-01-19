@@ -25,52 +25,52 @@ const headers = {
 // UTILITY: Verify Authentication
 // ============================================================================
 const verifyAuth = (event) => {
- try {
-      const authHeader = event.headers.authorization || event.headers.Authorization;
-         
-         if (!authHeader || !authHeader.startsWith("Bearer ")) {
-           return {
-             statusCode: 401,
-             headers,
-             body: JSON.stringify({
-               success: false,
-               message: "Token expired. Redirecting to login...",
-               redirect: "https://vtufest2026.acharyahabba.com/",
-             }),
-           };
-         }
-     
-         const token = authHeader.substring(7);
-         let decoded;
-     
-         try {
-           decoded = jwt.verify(token, JWT_SECRET);
-         } catch (err) {
-           return {
-             statusCode: 401,
-             headers,
-             body: JSON.stringify({
-               success: false,
-               message: "Token expired. Redirecting to login...",
-               redirect: "https://vtufest2026.acharyahabba.com/",
-             }),
-           };
-         }
-       const role = decoded.role;
- 
- 
-     if (decoded.role !== 'PRINCIPAL' && decoded.role !== 'MANAGER') {
-       throw new Error('Unauthorized: Principal or Manager role required');
-     }
-     const auth = {
-       user_id: decoded.user_id,
-       college_id: decoded.college_id,
-       role: decoded.role,
-     };
-      return auth;
-    } catch (error) {
-      throw error;
+  try {
+    const authHeader = event.headers.authorization || event.headers.Authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({
+          success: false,
+          message: "Token expired. Redirecting to login...",
+          redirect: "https://vtufest2026.acharyahabba.com/",
+        }),
+      };
     }
+
+    const token = authHeader.substring(7);
+    let decoded;
+
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({
+          success: false,
+          message: "Token expired. Redirecting to login...",
+          redirect: "https://vtufest2026.acharyahabba.com/",
+        }),
+      };
+    }
+    const role = decoded.role;
+
+
+    if (decoded.role !== 'PRINCIPAL' && decoded.role !== 'MANAGER') {
+      throw new Error('Unauthorized: Principal or Manager role required');
+    }
+    const auth = {
+      user_id: decoded.user_id,
+      college_id: decoded.college_id,
+      role: decoded.role,
+    };
+    return auth;
+  } catch (error) {
+    throw error;
+  }
 };
 
 
@@ -89,6 +89,12 @@ const getApprovedStudents = async (pool, auth) => {
         s.usn,
         s.email,
         s.phone,
+        s.gender,
+        sa.blood_group,
+        sa.address,
+        sa.department,
+        sa.year_of_study,
+        sa.semester,
         sa.status
       FROM student_applications sa
       INNER JOIN students s ON sa.student_id = s.student_id
@@ -147,7 +153,7 @@ const getApprovedStudents = async (pool, auth) => {
     headers,
     body: JSON.stringify({
       success: true,
-      students,
+      students: result.recordset,
     }),
   };
 };
@@ -325,6 +331,108 @@ const moveToRejected = async (pool, auth, body) => {
   };
 };
 
+
+// ============================================================================
+// ACTION: edit_approved_student_details
+// ============================================================================
+const editApprovedStudentDetails = async (pool, auth, body) => {
+  const {
+    student_id,
+    full_name,
+    email,
+    phone,
+    gender,
+    blood_group,
+    address,
+    department,
+    year_of_study,
+    semester
+  } = body;
+
+  if (!student_id) {
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({ error: 'student_id is required' }),
+    };
+  }
+
+  // Check if final approval is locked
+  const lockCheck = await pool
+    .request()
+    .input('college_id', sql.Int, auth.college_id)
+    .query(`
+      SELECT is_final_approved
+      FROM colleges
+      WHERE college_id = @college_id
+    `);
+
+  if (lockCheck.recordset[0].is_final_approved === 1) {
+    return {
+      statusCode: 403,
+      headers,
+      body: JSON.stringify({ error: 'Final approval is locked. Cannot edit students.' }),
+    };
+  }
+
+  const transaction = pool.transaction();
+  await transaction.begin();
+
+  try {
+    // Update students table
+    await transaction
+      .request()
+      .input('student_id', sql.Int, student_id)
+      .input('full_name', sql.VarChar(255), full_name)
+      .input('email', sql.VarChar(255), email)
+      .input('phone', sql.VarChar(20), phone)
+      .input('gender', sql.VarChar(10), gender)
+      .query(`
+        UPDATE students
+        SET 
+          full_name = @full_name,
+          email = @email,
+          phone = @phone,
+          gender = @gender
+        WHERE student_id = @student_id
+      `);
+
+    // Update student_applications table
+    await transaction
+      .request()
+      .input('student_id', sql.Int, student_id)
+      .input('blood_group', sql.VarChar(5), blood_group)
+      .input('address', sql.VarChar(500), address)
+      .input('department', sql.VarChar(100), department)
+      .input('year_of_study', sql.Int, year_of_study)
+      .input('semester', sql.Int, semester)
+      .query(`
+        UPDATE student_applications
+        SET 
+          blood_group = @blood_group,
+          address = @address,
+          department = @department,
+          year_of_study = @year_of_study,
+          semester = @semester
+        WHERE student_id = @student_id
+      `);
+
+    await transaction.commit();
+
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({
+        success: true,
+        message: 'Student details updated successfully',
+      }),
+    };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+};
+
 // ============================================================================
 // MAIN HANDLER
 // ============================================================================
@@ -369,8 +477,8 @@ exports.handler = async (event) => {
 
     if (action === 'get_approved_students') {
       return await getApprovedStudents(pool, auth);
-    } else if (action === 'edit_student_events') {
-      return await editStudentEvents(pool, auth, body);
+    } else if (action === 'edit_approved_student_details') {
+      return await editApprovedStudentDetails(pool, auth, body);
     } else if (action === 'move_to_rejected') {
       return await moveToRejected(pool, auth, body);
     } else {
