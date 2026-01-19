@@ -22,52 +22,52 @@ const headers = {
 };
 
 const verifyAuth = (event) => {
- try {
-      const authHeader = event.headers.authorization || event.headers.Authorization;
-         
-         if (!authHeader || !authHeader.startsWith("Bearer ")) {
-           return {
-             statusCode: 401,
-             headers,
-             body: JSON.stringify({
-               success: false,
-               message: "Token expired. Redirecting to login...",
-               redirect: "https://vtufest2026.acharyahabba.com/",
-             }),
-           };
-         }
-     
-         const token = authHeader.substring(7);
-         let decoded;
-     
-         try {
-           decoded = jwt.verify(token, JWT_SECRET);
-         } catch (err) {
-           return {
-             statusCode: 401,
-             headers,
-             body: JSON.stringify({
-               success: false,
-               message: "Token expired. Redirecting to login...",
-               redirect: "https://vtufest2026.acharyahabba.com/",
-             }),
-           };
-         }
-       const role = decoded.role;
- 
- 
-     if (decoded.role !== 'PRINCIPAL' && decoded.role !== 'MANAGER') {
-       throw new Error('Unauthorized: Principal or Manager role required');
-     }
-     const auth = {
-       user_id: decoded.user_id,
-       college_id: decoded.college_id,
-       role: decoded.role,
-     };
-      return auth;
-    } catch (error) {
-      throw error;
+  try {
+    const authHeader = event.headers.authorization || event.headers.Authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({
+          success: false,
+          message: "Token expired. Redirecting to login...",
+          redirect: "https://vtufest2026.acharyahabba.com/",
+        }),
+      };
     }
+
+    const token = authHeader.substring(7);
+    let decoded;
+
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({
+          success: false,
+          message: "Token expired. Redirecting to login...",
+          redirect: "https://vtufest2026.acharyahabba.com/",
+        }),
+      };
+    }
+    const role = decoded.role;
+
+
+    if (decoded.role !== 'PRINCIPAL' && decoded.role !== 'MANAGER') {
+      throw new Error('Unauthorized: Principal or Manager role required');
+    }
+    const auth = {
+      user_id: decoded.user_id,
+      college_id: decoded.college_id,
+      role: decoded.role,
+    };
+    return auth;
+  } catch (error) {
+    throw error;
+  }
 };
 
 // ============================================================================
@@ -425,6 +425,132 @@ const rejectStudent = async (pool, auth, body) => {
   };
 };
 
+
+// Add this new action before the MAIN HANDLER section
+
+// ============================================================================
+// ACTION: edit_student_details
+// ============================================================================
+const editStudentDetails = async (pool, auth, body) => {
+  const {
+    application_id,
+    full_name,
+    email,
+    phone,
+    gender,
+    blood_group,
+    address,
+    department,
+    year_of_study,
+    semester
+  } = body;
+
+  if (!application_id) {
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({ error: 'application_id is required' }),
+    };
+  }
+
+  // Check if final approval is locked
+  const lockCheck = await pool
+    .request()
+    .input('college_id', sql.Int, auth.college_id)
+    .query(`
+      SELECT is_final_approved
+      FROM colleges
+      WHERE college_id = @college_id
+    `);
+
+  if (lockCheck.recordset[0].is_final_approved === 1) {
+    return {
+      statusCode: 403,
+      headers,
+      body: JSON.stringify({ error: 'Final approval is locked. Cannot edit students.' }),
+    };
+  }
+
+  const transaction = pool.transaction();
+  await transaction.begin();
+
+  try {
+    // Get student_id from application
+    const appResult = await transaction
+      .request()
+      .input('application_id', sql.Int, application_id)
+      .query(`
+        SELECT student_id
+        FROM student_applications
+        WHERE application_id = @application_id
+      `);
+
+    if (appResult.recordset.length === 0) {
+      await transaction.rollback();
+      return {
+        statusCode: 404,
+        headers,
+        body: JSON.stringify({ error: 'Application not found' }),
+      };
+    }
+
+    const student_id = appResult.recordset[0].student_id;
+
+    // Update students table
+    await transaction
+      .request()
+      .input('student_id', sql.Int, student_id)
+      .input('full_name', sql.VarChar(255), full_name)
+      .input('email', sql.VarChar(255), email)
+      .input('phone', sql.VarChar(20), phone)
+      .input('gender', sql.VarChar(10), gender)
+      .query(`
+        UPDATE students
+        SET 
+          full_name = @full_name,
+          email = @email,
+          phone = @phone,
+          gender = @gender
+        WHERE student_id = @student_id
+      `);
+
+    // Update student_applications table
+    await transaction
+      .request()
+      .input('application_id', sql.Int, application_id)
+      .input('blood_group', sql.VarChar(5), blood_group)
+      .input('address', sql.VarChar(500), address)
+      .input('department', sql.VarChar(100), department)
+      .input('year_of_study', sql.Int, year_of_study)
+      .input('semester', sql.Int, semester)
+      .query(`
+        UPDATE student_applications
+        SET 
+          blood_group = @blood_group,
+          address = @address,
+          department = @department,
+          year_of_study = @year_of_study,
+          semester = @semester
+        WHERE application_id = @application_id
+      `);
+
+    await transaction.commit();
+
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({
+        success: true,
+        message: 'Student details updated successfully',
+      }),
+    };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+};
+
+
 // ============================================================================
 // MAIN HANDLER
 // ============================================================================
@@ -473,6 +599,8 @@ exports.handler = async (event) => {
       return await approveStudent(pool, auth, body);
     } else if (action === 'reject_student') {
       return await rejectStudent(pool, auth, body);
+    } else if (action === 'edit_student_details') {
+      return await editStudentDetails(pool, auth, body);
     } else {
       return {
         statusCode: 400,
