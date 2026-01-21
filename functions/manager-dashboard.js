@@ -21,10 +21,6 @@ const headers = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-
-// ============================================================================
-// MAIN HANDLER
-// ============================================================================
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 200, headers, body: '' };
@@ -40,63 +36,57 @@ exports.handler = async (event) => {
   
   let pool;
   try {
-     const authHeader = event.headers.authorization || event.headers.Authorization;
+    const authHeader = event.headers.authorization || event.headers.Authorization;
         
-        if (!authHeader || !authHeader.startsWith("Bearer ")) {
-          return {
-            statusCode: 401,
-            headers,
-            body: JSON.stringify({
-              success: false,
-              message: "Token expired. Redirecting to login...",
-              redirect: "https://vtufest2026.acharyahabba.com/",
-            }),
-          };
-        }
-    
-        const token = authHeader.substring(7);
-        let decoded;
-    
-        try {
-          decoded = jwt.verify(token, JWT_SECRET);
-        } catch (err) {
-          return {
-            statusCode: 401,
-            headers,
-            body: JSON.stringify({
-              success: false,
-              message: "Token expired. Redirecting to login...",
-              redirect: "https://vtufest2026.acharyahabba.com/",
-            }),
-          };
-        }
-      const role = decoded.role;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({
+          success: false,
+          message: "Token expired. Redirecting to login...",
+          redirect: "https://vtufest2026.acharyahabba.com/",
+        }),
+      };
+    }
 
+    const token = authHeader.substring(7);
+    let decoded;
+
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({
+          success: false,
+          message: "Token expired. Redirecting to login...",
+          redirect: "https://vtufest2026.acharyahabba.com/",
+        }),
+      };
+    }
 
     if (decoded.role !== 'PRINCIPAL' && decoded.role !== 'MANAGER') {
       throw new Error('Unauthorized: Principal or Manager role required');
     }
+    
     const auth = {
       user_id: decoded.user_id,
       college_id: decoded.college_id,
       role: decoded.role,
     };
 
-
-
-    // Connect to database
     pool = await sql.connect(dbConfig);
     
-    // ============================================
     // 1. GET COLLEGE INFO
-    // ============================================
     const collegeResult = await pool
-    .request()
-    .input('college_id', sql.Int, auth.college_id)
-    .query(`
-      SELECT 
-      college_code,
-      college_name,
+      .request()
+      .input('college_id', sql.Int, auth.college_id)
+      .query(`
+        SELECT 
+          college_code,
+          college_name,
           place,
           max_quota,
           is_final_approved,
@@ -115,9 +105,7 @@ exports.handler = async (event) => {
 
     const college = collegeResult.recordset[0];
 
-    // ============================================
-    // 2. COUNT TOTAL STUDENTS FROM COLLEGE
-    // ============================================
+    // 2. COUNT TOTAL STUDENTS
     const totalStudentsResult = await pool
       .request()
       .input('college_id', sql.Int, auth.college_id)
@@ -129,9 +117,7 @@ exports.handler = async (event) => {
 
     const total_students = totalStudentsResult.recordset[0].total;
 
-    // ============================================
     // 3. COUNT STUDENTS WITH APPLICATIONS
-    // ============================================
     const studentsWithAppsResult = await pool
       .request()
       .input('college_id', sql.Int, auth.college_id)
@@ -144,9 +130,7 @@ exports.handler = async (event) => {
 
     const students_with_applications = studentsWithAppsResult.recordset[0].total;
 
-    // ============================================
     // 4. COUNT APPROVED STUDENTS
-    // ============================================
     const approvedResult = await pool
       .request()
       .input('college_id', sql.Int, auth.college_id)
@@ -160,9 +144,7 @@ exports.handler = async (event) => {
 
     const approved_students = approvedResult.recordset[0].total;
 
-    // ============================================
     // 5. COUNT REJECTED STUDENTS
-    // ============================================
     const rejectedResult = await pool
       .request()
       .input('college_id', sql.Int, auth.college_id)
@@ -176,9 +158,7 @@ exports.handler = async (event) => {
 
     const rejected_students = rejectedResult.recordset[0].total;
 
-    // ============================================
     // 6. COUNT ACCOMPANISTS
-    // ============================================
     const accompanistsResult = await pool
       .request()
       .input('college_id', sql.Int, auth.college_id)
@@ -190,9 +170,146 @@ exports.handler = async (event) => {
 
     const accompanists_count = accompanistsResult.recordset[0].total;
 
-    // ============================================
+    // ============================================================================
+    // ✅ FIXED: COUNT PARTICIPATING EVENTS (DISTINCT EVENTS WITH PARTICIPANTS)
+    // This counts EVENTS (0-25), not students
+    // Each event is counted ONCE if college has at least 1 participant
+    // ============================================================================
+    const participatingEventsResult = await pool
+      .request()
+      .input('college_id', sql.Int, auth.college_id)
+      .query(`
+        SELECT (
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_classical_vocal_solo 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_light_vocal_solo 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_western_vocal_solo 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_classical_instr_percussion 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_classical_instr_non_percussion 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_folk_orchestra 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_group_song_indian 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_group_song_western 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_folk_dance 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_classical_dance_solo 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_mime 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_mimicry 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_one_act_play 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_skits 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_debate 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_elocution 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_quiz 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_cartooning 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_clay_modelling 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_collage_making 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_installation 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_on_spot_painting 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_poster_making 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_rangoli 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END +
+          
+          CASE WHEN EXISTS (
+            SELECT 1 FROM event_spot_photography 
+            WHERE college_id = @college_id AND role = 'participant'
+          ) THEN 1 ELSE 0 END
+        ) AS event_count
+      `);
+
+    const participating_event_count = participatingEventsResult.recordset[0].event_count;
+
     // 7. GET ACCOMMODATION STATUS
-    // ============================================
     const accommodationResult = await pool
       .request()
       .input('college_id', sql.Int, auth.college_id)
@@ -217,9 +334,7 @@ exports.handler = async (event) => {
       };
     }
 
-    // ============================================
     // 8. GET PAYMENT STATUS
-    // ============================================
     const paymentResult = await pool
       .request()
       .input('college_id', sql.Int, auth.college_id)
@@ -242,11 +357,9 @@ exports.handler = async (event) => {
       };
     }
 
-    // ============================================
     // 9. CHECK IF TEAM MANAGER EXISTS (FOR PRINCIPAL)
-    // ============================================
     let has_team_manager = false;
-    if (auth.role === 'principal') {
+    if (auth.role === 'PRINCIPAL') {
       const managerResult = await pool
         .request()
         .input('college_id', sql.Int, auth.college_id)
@@ -261,14 +374,10 @@ exports.handler = async (event) => {
       has_team_manager = managerResult.recordset[0].total > 0;
     }
 
-    // ============================================
-    // 10. CALCULATE QUOTA (APPROVED STUDENTS + ACCOMPANISTS)
-    // ============================================
+    // 10. CALCULATE QUOTA
     const quota_used = approved_students + accompanists_count;
 
-    // ============================================
     // 11. BUILD RESPONSE
-    // ============================================
     return {
       statusCode: 200,
       headers,
@@ -289,12 +398,13 @@ exports.handler = async (event) => {
             accompanists_count,
             quota_used,
             quota_remaining: college.max_quota - quota_used,
+            participating_event_count, // ✅ NOW CORRECT: 0-25 event count
           },
           accommodation,
           payment_status,
           is_final_approved: college.is_final_approved === 1,
           final_approved_at: college.final_approved_at,
-          has_team_manager, // Only for Principal
+          has_team_manager,
         },
       }),
     };
