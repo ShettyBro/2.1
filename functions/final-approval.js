@@ -22,52 +22,51 @@ const headers = {
 };
 
 const verifyAuth = (event) => {
- try {
-      const authHeader = event.headers.authorization || event.headers.Authorization;
-         
-         if (!authHeader || !authHeader.startsWith("Bearer ")) {
-           return {
-             statusCode: 401,
-             headers,
-             body: JSON.stringify({
-               success: false,
-               message: "Token expired. Redirecting to login...",
-               redirect: "https://vtufest2026.acharyahabba.com/",
-             }),
-           };
-         }
-     
-         const token = authHeader.substring(7);
-         let decoded;
-     
-         try {
-           decoded = jwt.verify(token, JWT_SECRET);
-         } catch (err) {
-           return {
-             statusCode: 401,
-             headers,
-             body: JSON.stringify({
-               success: false,
-               message: "Token expired. Redirecting to login...",
-               redirect: "https://vtufest2026.acharyahabba.com/",
-             }),
-           };
-         }
-       const role = decoded.role;
- 
- 
-     if (decoded.role !== 'PRINCIPAL' && decoded.role !== 'MANAGER') {
-       throw new Error('Unauthorized: Principal or Manager role required');
-     }
-     const auth = {
-       user_id: decoded.user_id,
-       college_id: decoded.college_id,
-       role: decoded.role,
-     };
-      return auth;
-    } catch (error) {
-      throw error;
+  try {
+    const authHeader = event.headers.authorization || event.headers.Authorization;
+    
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({
+          success: false,
+          message: "Token expired. Redirecting to login...",
+          redirect: "https://vtufest2026.acharyahabba.com/",
+        }),
+      };
     }
+
+    const token = authHeader.substring(7);
+    let decoded;
+
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({
+          success: false,
+          message: "Token expired. Redirecting to login...",
+          redirect: "https://vtufest2026.acharyahabba.com/",
+        }),
+      };
+    }
+
+    if (decoded.role !== 'PRINCIPAL' && decoded.role !== 'MANAGER') {
+      throw new Error('Unauthorized: Principal or Manager role required');
+    }
+
+    const auth = {
+      user_id: decoded.user_id,
+      college_id: decoded.college_id,
+      role: decoded.role,
+    };
+    return auth;
+  } catch (error) {
+    throw error;
+  }
 };
 
 // ============================================================================
@@ -89,13 +88,21 @@ exports.handler = async (event) => {
   let pool;
   try {
     const auth = verifyAuth(event);
+    
+    // If auth returned an error response, return it
+    if (auth.statusCode) {
+      return auth;
+    }
+
     pool = await sql.connect(dbConfig);
 
     const transaction = pool.transaction();
     await transaction.begin();
 
     try {
-      // Check if already finalized
+      // ======================================================================
+      // STEP 1: Check if already finalized
+      // ======================================================================
       const lockCheck = await transaction
         .request()
         .input('college_id', sql.Int, auth.college_id)
@@ -104,6 +111,15 @@ exports.handler = async (event) => {
           FROM colleges
           WHERE college_id = @college_id
         `);
+
+      if (lockCheck.recordset.length === 0) {
+        await transaction.rollback();
+        return {
+          statusCode: 404,
+          headers,
+          body: JSON.stringify({ error: 'College not found' }),
+        };
+      }
 
       if (lockCheck.recordset[0].is_final_approved === 1) {
         await transaction.rollback();
@@ -114,52 +130,91 @@ exports.handler = async (event) => {
         };
       }
 
-      // Get all APPROVED students
-      const studentsResult = await transaction
+      // ======================================================================
+      // STEP 2: Get college name for inserts
+      // ======================================================================
+      const collegeResult = await transaction
         .request()
         .input('college_id', sql.Int, auth.college_id)
         .query(`
-          SELECT 
-            sa.student_id,
+          SELECT college_name
+          FROM colleges
+          WHERE college_id = @college_id
+        `);
+
+      const collegeName = collegeResult.recordset[0].college_name;
+
+      // ======================================================================
+      // STEP 3: Get ELIGIBLE STUDENTS
+      // Criteria: APPROVED status AND appears in at least ONE event table
+      // ======================================================================
+      const eligibleStudentsResult = await transaction
+        .request()
+        .input('college_id', sql.Int, auth.college_id)
+        .query(`
+          SELECT DISTINCT
+            s.student_id,
             s.full_name,
             s.phone,
             s.email,
             s.passport_photo_url
-          FROM student_applications sa
-          INNER JOIN students s ON sa.student_id = s.student_id
+          FROM students s
+          INNER JOIN student_applications sa ON s.student_id = sa.student_id
           WHERE s.college_id = @college_id
             AND sa.status = 'APPROVED'
+            AND (
+              EXISTS (SELECT 1 FROM event_mime WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_mimicry WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_one_act_play WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_skits WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_debate WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_elocution WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_quiz WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_cartooning WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_clay_modelling WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_collage_making WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_installation WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_on_spot_painting WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_poster_making WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_rangoli WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_spot_photography WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_classical_vocal_solo WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_classical_instr_percussion WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_classical_instr_non_percussion WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_light_vocal_solo WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_western_vocal_solo WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_group_song_indian WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_group_song_western WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_folk_orchestra WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_folk_dance WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+              OR EXISTS (SELECT 1 FROM event_classical_dance_solo WHERE student_id = s.student_id AND person_type = 'student' AND college_id = @college_id)
+            )
         `);
 
-      const students = studentsResult.recordset;
+      const eligibleStudents = eligibleStudentsResult.recordset;
+
+      // ======================================================================
+      // CRITICAL: FAIL if ZERO eligible students
+      // ======================================================================
+      if (eligibleStudents.length === 0) {
+        await transaction.rollback();
+        return {
+          statusCode: 400,
+          headers,
+          body: JSON.stringify({
+            error: 'Final approval failed. No eligible students found.',
+            details: 'No approved students have been assigned to any events. Please assign students to events before final approval.',
+          }),
+        };
+      }
+
       let inserted_students = 0;
 
-      // Insert students into master table
-      for (const student of students) {
-        // Get participating events
-        const participatingResult = await transaction
-          .request()
-          .input('student_id', sql.Int, student.student_id)
-          .query(`
-            SELECT e.event_id, e.event_name
-            FROM student_event_participation sep
-            INNER JOIN events e ON sep.event_id = e.event_id
-            WHERE sep.student_id = @student_id
-              AND sep.event_type = 'participating'
-          `);
-
-        // Get accompanying events
-        const accompanyingResult = await transaction
-          .request()
-          .input('student_id', sql.Int, student.student_id)
-          .query(`
-            SELECT e.event_id, e.event_name
-            FROM student_event_participation sep
-            INNER JOIN events e ON sep.event_id = e.event_id
-            WHERE sep.student_id = @student_id
-              AND sep.event_type = 'accompanying'
-          `);
-
+      // ======================================================================
+      // STEP 4: Insert STUDENTS into master table
+      // Insert ONE row per student (not per event)
+      // ======================================================================
+      for (const student of eligibleStudents) {
         // Get student documents
         const docsResult = await transaction
           .request()
@@ -181,50 +236,56 @@ exports.handler = async (event) => {
           }
         });
 
-        const event_in_ids = participatingResult.recordset.map(e => e.event_id).join(',');
-        const event_in_names = participatingResult.recordset.map(e => e.event_name).join(',');
-        const accompanist_in_names = accompanyingResult.recordset.map(e => e.event_name).join(',');
+        // Insert ONE row per student
+        await transaction
+          .request()
+          .input('student_id', sql.Int, student.student_id)
+          .input('full_name', sql.VarChar(255), student.full_name)
+          .input('phone', sql.VarChar(20), student.phone)
+          .input('email', sql.VarChar(255), student.email)
+          .input('photo_url', sql.VarChar(500), student.passport_photo_url)
+          .input('college_id', sql.Int, auth.college_id)
+          .input('college_name', sql.VarChar(255), collegeName)
+          .input('aadhaar_url', sql.VarChar(500), documents.aadhar || null)
+          .input('college_id_url', sql.VarChar(500), documents.college_id || null)
+          .input('sslc_url', sql.VarChar(500), documents.sslc || null)
+          .query(`
+            INSERT INTO final_event_participants_master (
+              participant_role,
+              student_id,
+              accompanist_id,
+              full_name,
+              phone,
+              email,
+              photo_url,
+              college_id,
+              college_name,
+              aadhaar_url,
+              college_id_url,
+              sslc_url
+            )
+            VALUES (
+              'STUDENT',
+              @student_id,
+              NULL,
+              @full_name,
+              @phone,
+              @email,
+              @photo_url,
+              @college_id,
+              @college_name,
+              @aadhaar_url,
+              @college_id_url,
+              @sslc_url
+            )
+          `);
 
-        // Insert one row per participating event
-        for (const event of participatingResult.recordset) {
-          await transaction
-            .request()
-            .input('person_id', sql.Int, student.student_id)
-            .input('person_type', sql.VarChar(15), 'student')
-            .input('full_name', sql.VarChar(255), student.full_name)
-            .input('phone', sql.VarChar(20), student.phone)
-            .input('email', sql.VarChar(255), student.email)
-            .input('photo_url', sql.VarChar(500), student.passport_photo_url)
-            .input('event_id', sql.Int, event.event_id)
-            .input('college_id', sql.Int, auth.college_id)
-            .input('event_type', sql.VarChar(20), 'participating')
-            .input('event_in', sql.VarChar(255), event_in_ids)
-            .input('accompanish_in', sql.VarChar(255), accompanist_in_names || null)
-            .input('event_in_names', sql.VarChar(500), event_in_names)
-            .input('accompanist_in_names', sql.VarChar(500), accompanist_in_names || null)
-            .input('aadhaar_url', sql.VarChar(500), documents.aadhar || null)
-            .input('college_id_url', sql.VarChar(500), documents.college_id || null)
-            .input('sslc_url', sql.VarChar(500), documents.sslc || null)
-            .query(`
-              INSERT INTO final_event_participants_master (
-                person_id, person_type, full_name, phone, email, photo_url,
-                event_id, college_id, event_type, event_in, accompanish_in,
-                event_in_names, accompanist_in_names,
-                aadhaar_url, college_id_url, sslc_url
-              )
-              VALUES (
-                @person_id, @person_type, @full_name, @phone, @email, @photo_url,
-                @event_id, @college_id, @event_type, @event_in, @accompanish_in,
-                @event_in_names, @accompanist_in_names,
-                @aadhaar_url, @college_id_url, @sslc_url
-              )
-            `);
-
-          inserted_students++;
-        }
+        inserted_students++;
       }
 
-      // Get all accompanists
+      // ======================================================================
+      // STEP 5: Get ALL accompanists (no event verification needed)
+      // ======================================================================
       const accompanistsResult = await transaction
         .request()
         .input('college_id', sql.Int, auth.college_id)
@@ -245,58 +306,60 @@ exports.handler = async (event) => {
       const accompanists = accompanistsResult.recordset;
       let inserted_accompanists = 0;
 
-      // Insert accompanists into master table
+      // ======================================================================
+      // STEP 6: Insert ACCOMPANISTS into master table
+      // Insert ONE row per accompanist
+      // ======================================================================
       for (const acc of accompanists) {
-        // Get assigned events
-        const eventsResult = await transaction
+        await transaction
           .request()
           .input('accompanist_id', sql.Int, acc.accompanist_id)
+          .input('full_name', sql.VarChar(255), acc.full_name)
+          .input('phone', sql.VarChar(20), acc.phone)
+          .input('email', sql.VarChar(255), acc.email)
+          .input('photo_url', sql.VarChar(500), acc.passport_photo_url)
+          .input('college_id', sql.Int, auth.college_id)
+          .input('college_name', sql.VarChar(255), collegeName)
+          .input('accompanist_type', sql.VarChar(20), acc.accompanist_type)
+          .input('is_team_manager', sql.Bit, acc.is_team_manager || 0)
+          .input('accompanist_id_proof_url', sql.VarChar(500), acc.id_proof_url)
           .query(`
-            SELECT e.event_id, e.event_name
-            FROM accompanist_event_participation aep
-            INNER JOIN events e ON aep.event_id = e.event_id
-            WHERE aep.accompanist_id = @accompanist_id
+            INSERT INTO final_event_participants_master (
+              participant_role,
+              student_id,
+              accompanist_id,
+              full_name,
+              phone,
+              email,
+              photo_url,
+              college_id,
+              college_name,
+              accompanist_type,
+              is_team_manager,
+              accompanist_id_proof_url
+            )
+            VALUES (
+              'ACCOMPANIST',
+              NULL,
+              @accompanist_id,
+              @full_name,
+              @phone,
+              @email,
+              @photo_url,
+              @college_id,
+              @college_name,
+              @accompanist_type,
+              @is_team_manager,
+              @accompanist_id_proof_url
+            )
           `);
 
-        const accompanist_in_names = eventsResult.recordset.map(e => e.event_name).join(',');
-
-        // Insert one row per assigned event
-        for (const event of eventsResult.recordset) {
-          await transaction
-            .request()
-            .input('person_id', sql.Int, acc.accompanist_id)
-            .input('person_type', sql.VarChar(15), 'accompanist')
-            .input('full_name', sql.VarChar(255), acc.full_name)
-            .input('phone', sql.VarChar(20), acc.phone)
-            .input('email', sql.VarChar(255), acc.email)
-            .input('photo_url', sql.VarChar(500), acc.passport_photo_url)
-            .input('accompanist_type', sql.VarChar(20), acc.accompanist_type)
-            .input('is_team_manager', sql.Bit, acc.is_team_manager || 0)
-            .input('event_id', sql.Int, event.event_id)
-            .input('college_id', sql.Int, auth.college_id)
-            .input('event_type', sql.VarChar(20), 'accompanying')
-            .input('accompanist_in_names', sql.VarChar(500), accompanist_in_names)
-            .input('accompanist_id_proof_url', sql.VarChar(500), acc.id_proof_url)
-            .query(`
-              INSERT INTO final_event_participants_master (
-                person_id, person_type, full_name, phone, email, photo_url,
-                accompanist_type, is_team_manager,
-                event_id, college_id, event_type,
-                accompanist_in_names, accompanist_id_proof_url
-              )
-              VALUES (
-                @person_id, @person_type, @full_name, @phone, @email, @photo_url,
-                @accompanist_type, @is_team_manager,
-                @event_id, @college_id, @event_type,
-                @accompanist_in_names, @accompanist_id_proof_url
-              )
-            `);
-
-          inserted_accompanists++;
-        }
+        inserted_accompanists++;
       }
 
-      // Set final approval lock
+      // ======================================================================
+      // STEP 7: Set final approval lock
+      // ======================================================================
       await transaction
         .request()
         .input('college_id', sql.Int, auth.college_id)
