@@ -131,22 +131,9 @@ exports.handler = async (event) => {
       }
 
       // ======================================================================
-      // STEP 2: Get college name for inserts
-      // ======================================================================
-      const collegeResult = await transaction
-        .request()
-        .input('college_id', sql.Int, auth.college_id)
-        .query(`
-          SELECT college_name
-          FROM colleges
-          WHERE college_id = @college_id
-        `);
-
-      const collegeName = collegeResult.recordset[0].college_name;
-
-      // ======================================================================
-      // STEP 3: Get ELIGIBLE STUDENTS
+      // STEP 2: Get ELIGIBLE STUDENTS
       // Criteria: APPROVED status AND appears in at least ONE event table
+      // Event tables are ONLY used for verification, NOT as data source
       // ======================================================================
       const eligibleStudentsResult = await transaction
         .request()
@@ -211,17 +198,17 @@ exports.handler = async (event) => {
       let inserted_students = 0;
 
       // ======================================================================
-      // STEP 4: Insert STUDENTS into master table
+      // STEP 3: Insert STUDENTS into master table
       // Insert ONE row per student (not per event)
+      // Data source: students table + student_applications table
       // ======================================================================
       for (const student of eligibleStudents) {
-        // Get student documents
+        // Get student documents from student_applications
         const docsResult = await transaction
           .request()
           .input('student_id', sql.Int, student.student_id)
           .query(`
             SELECT 
-              sa.application_id,
               ad.document_type,
               ad.document_url
             FROM student_applications sa
@@ -239,44 +226,53 @@ exports.handler = async (event) => {
         // Insert ONE row per student
         await transaction
           .request()
+          .input('college_id', sql.Int, auth.college_id)
+          .input('person_type', sql.VarChar(20), 'STUDENT')
           .input('student_id', sql.Int, student.student_id)
+          .input('is_team_manager', sql.Bit, 0)
           .input('full_name', sql.VarChar(255), student.full_name)
           .input('phone', sql.VarChar(20), student.phone)
           .input('email', sql.VarChar(255), student.email)
           .input('photo_url', sql.VarChar(500), student.passport_photo_url)
-          .input('college_id', sql.Int, auth.college_id)
-          .input('college_name', sql.VarChar(255), collegeName)
           .input('aadhaar_url', sql.VarChar(500), documents.aadhar || null)
           .input('college_id_url', sql.VarChar(500), documents.college_id || null)
           .input('sslc_url', sql.VarChar(500), documents.sslc || null)
+          .input('final_approved_at', sql.DateTime2, new Date())
+          .input('final_approved_by', sql.Int, auth.user_id)
           .query(`
             INSERT INTO final_event_participants_master (
-              participant_role,
+              college_id,
+              person_type,
               student_id,
               accompanist_id,
+              is_team_manager,
               full_name,
               phone,
               email,
               photo_url,
-              college_id,
-              college_name,
               aadhaar_url,
               college_id_url,
-              sslc_url
+              sslc_url,
+              accompanist_id_proof_url,
+              final_approved_at,
+              final_approved_by
             )
             VALUES (
-              'STUDENT',
+              @college_id,
+              @person_type,
               @student_id,
               NULL,
+              @is_team_manager,
               @full_name,
               @phone,
               @email,
               @photo_url,
-              @college_id,
-              @college_name,
               @aadhaar_url,
               @college_id_url,
-              @sslc_url
+              @sslc_url,
+              NULL,
+              @final_approved_at,
+              @final_approved_by
             )
           `);
 
@@ -284,7 +280,8 @@ exports.handler = async (event) => {
       }
 
       // ======================================================================
-      // STEP 5: Get ALL accompanists (no event verification needed)
+      // STEP 4: Get ALL accompanists (no event verification needed)
+      // Includes regular accompanists AND team manager
       // ======================================================================
       const accompanistsResult = await transaction
         .request()
@@ -307,50 +304,58 @@ exports.handler = async (event) => {
       let inserted_accompanists = 0;
 
       // ======================================================================
-      // STEP 6: Insert ACCOMPANISTS into master table
+      // STEP 5: Insert ACCOMPANISTS into master table
       // Insert ONE row per accompanist
+      // Data source: accompanists table only
       // ======================================================================
       for (const acc of accompanists) {
         await transaction
           .request()
+          .input('college_id', sql.Int, auth.college_id)
+          .input('person_type', sql.VarChar(20), 'ACCOMPANIST')
           .input('accompanist_id', sql.Int, acc.accompanist_id)
+          .input('is_team_manager', sql.Bit, acc.is_team_manager || 0)
           .input('full_name', sql.VarChar(255), acc.full_name)
           .input('phone', sql.VarChar(20), acc.phone)
           .input('email', sql.VarChar(255), acc.email)
           .input('photo_url', sql.VarChar(500), acc.passport_photo_url)
-          .input('college_id', sql.Int, auth.college_id)
-          .input('college_name', sql.VarChar(255), collegeName)
-          .input('accompanist_type', sql.VarChar(20), acc.accompanist_type)
-          .input('is_team_manager', sql.Bit, acc.is_team_manager || 0)
           .input('accompanist_id_proof_url', sql.VarChar(500), acc.id_proof_url)
+          .input('final_approved_at', sql.DateTime2, new Date())
+          .input('final_approved_by', sql.Int, auth.user_id)
           .query(`
             INSERT INTO final_event_participants_master (
-              participant_role,
+              college_id,
+              person_type,
               student_id,
               accompanist_id,
+              is_team_manager,
               full_name,
               phone,
               email,
               photo_url,
-              college_id,
-              college_name,
-              accompanist_type,
-              is_team_manager,
-              accompanist_id_proof_url
+              aadhaar_url,
+              college_id_url,
+              sslc_url,
+              accompanist_id_proof_url,
+              final_approved_at,
+              final_approved_by
             )
             VALUES (
-              'ACCOMPANIST',
+              @college_id,
+              @person_type,
               NULL,
               @accompanist_id,
+              @is_team_manager,
               @full_name,
               @phone,
               @email,
               @photo_url,
-              @college_id,
-              @college_name,
-              @accompanist_type,
-              @is_team_manager,
-              @accompanist_id_proof_url
+              NULL,
+              NULL,
+              NULL,
+              @accompanist_id_proof_url,
+              @final_approved_at,
+              @final_approved_by
             )
           `);
 
@@ -358,7 +363,7 @@ exports.handler = async (event) => {
       }
 
       // ======================================================================
-      // STEP 7: Set final approval lock
+      // STEP 6: Set final approval lock on college
       // ======================================================================
       await transaction
         .request()
@@ -373,6 +378,9 @@ exports.handler = async (event) => {
           WHERE college_id = @college_id
         `);
 
+      // ======================================================================
+      // COMMIT TRANSACTION - All or nothing
+      // ======================================================================
       await transaction.commit();
 
       return {
@@ -391,7 +399,7 @@ exports.handler = async (event) => {
       throw error;
     }
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Final Approval Error:', error);
 
     if (error.message.includes('Authorization') || error.message.includes('Unauthorized')) {
       return {
